@@ -1,15 +1,11 @@
-import { type AgentSessionEventWebhookPayload } from "@linear/sdk";
-import {
-  LinearWebhookClient,
-  LINEAR_WEBHOOK_SIGNATURE_HEADER,
-  LINEAR_WEBHOOK_TS_FIELD,
-} from "@linear/sdk/webhooks";
+import { LinearWebhookClient } from "@linear/sdk/webhooks";
 import {
   handleOAuthAuthorize,
   handleOAuthCallback,
   getOAuthToken,
 } from "./lib/oauth";
 import { AgentClient } from "./lib/agent/agentClient";
+import { AgentSessionEventWebhookPayload } from "@linear/sdk";
 
 /**
  * This Cloudflare worker handles all requests for the demo agent.
@@ -53,8 +49,8 @@ export default {
   },
 
   /**
-   * Handle webhook using the new LinearWebhookClient with simplified event handling.
-   * This eliminates all the boilerplate code for verification and parsing.
+   * Handle webhook using the new LinearWebhookClient with event emitter pattern.
+   * This uses the createHandler() method for simplified event handling.
    * @param request The incoming request.
    * @param env The environment variables.
    * @param ctx The execution context.
@@ -68,34 +64,13 @@ export default {
     try {
       // Create webhook client
       const webhookClient = new LinearWebhookClient(env.LINEAR_WEBHOOK_SECRET);
-      
-      // Get request body and headers
-      const body = await request.text();
-      const signature = request.headers.get(LINEAR_WEBHOOK_SIGNATURE_HEADER) || "";
-      
-      // Parse payload and verify signature
-      const payload = JSON.parse(body);
-      const timestamp = payload[LINEAR_WEBHOOK_TS_FIELD];
-      webhookClient.verify(Buffer.from(body), signature, timestamp);
+      const handler = webhookClient.createHandler();
 
-      // Handle AgentSessionEvent with the new pattern
-      if (payload.type === "AgentSessionEvent") {
-        const token = await getOAuthToken(env, payload.organizationId);
-        if (!token) {
-          return new Response("Linear OAuth token not found", { status: 500 });
-        }
+      handler.on("AgentSessionEvent", async (payload) => {
+        await this.handleAgentSessionEvent(payload, env, ctx);
+      });
 
-        // Use waitUntil to ensure async processing completes
-        ctx.waitUntil(
-          this.handleWebhook(payload, token, env.OPENAI_API_KEY).catch(
-            (error: unknown) => {
-              console.error("Error handling webhook:", error);
-            }
-          )
-        );
-      }
-      
-      return new Response("Webhook handled", { status: 200 });
+      return await handler(request);
     } catch (error) {
       console.error("Error in webhook handler:", error);
       return new Response("Error handling webhook", { status: 500 });
@@ -103,18 +78,24 @@ export default {
   },
 
   /**
-   * Handle a Linear webhook asynchronously (for non-blocking processing).
+   * Handle an AgentSessionEvent webhook asynchronously (for non-blocking processing).
    * @param webhook The agent session event webhook payload.
-   * @param linearAccessToken The Linear access token.
-   * @param openaiApiKey The OpenAI API key.
+   * @param env The environment variables.
+   * @param ctx The execution context.
    * @returns A promise that resolves when the webhook is handled.
    */
-  async handleWebhook(
-    webhook: AgentSessionEventWebhookPayload,
-    linearAccessToken: string,
-    openaiApiKey: string
+  async handleAgentSessionEvent(
+    webhook: any,
+    env: Env,
+    ctx: ExecutionContext
   ): Promise<void> {
-    const agentClient = new AgentClient(linearAccessToken, openaiApiKey);
+    const token = await getOAuthToken(env, webhook.organizationId);
+    if (!token) {
+      console.error("Linear OAuth token not found");
+      return;
+    }
+
+    const agentClient = new AgentClient(token, env.OPENAI_API_KEY);
     const userPrompt = this.generateUserPrompt(webhook);
     await agentClient.handleUserPrompt(webhook.agentSession.id, userPrompt);
   },
