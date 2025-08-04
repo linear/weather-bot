@@ -46,50 +46,61 @@ export default {
         return new Response("OpenAI API key not configured", { status: 500 });
       }
 
-      try {
-        // Verify that the webhook is valid and of a type we need to handle
-        const text = await request.text();
-        const payloadBuffer = Buffer.from(text);
-        const linearSignature = request.headers.get(LINEAR_WEBHOOK_SIGNATURE_HEADER) || "";
-        
-        // Parse the payload to get the timestamp
-        const parsedPayload = JSON.parse(text);
-        const timestamp = parsedPayload[LINEAR_WEBHOOK_TS_FIELD];
-        
-        // Create webhook client and verify the signature
-        const webhookClient = new LinearWebhookClient(env.LINEAR_WEBHOOK_SECRET);
-        webhookClient.verify(payloadBuffer, linearSignature, timestamp);
+      return this.handleWebhookWithEventListener(request, env, ctx);
+    }
 
-        if (parsedPayload.type !== "AgentSessionEvent") {
-          return new Response("Webhook received", { status: 200 });
-        }
+    return new Response("OK", { status: 200 });
+  },
 
-        const webhook = parsedPayload as AgentSessionEventWebhookPayload;
-        const token = await getOAuthToken(env, webhook.organizationId);
+  /**
+   * Handle webhook using the new LinearWebhookClient with simplified event handling.
+   * This eliminates all the boilerplate code for verification and parsing.
+   * @param request The incoming request.
+   * @param env The environment variables.
+   * @param ctx The execution context.
+   * @returns A response promise.
+   */
+  async handleWebhookWithEventListener(
+    request: Request,
+    env: Env,
+    ctx: ExecutionContext
+  ): Promise<Response> {
+    try {
+      // Create webhook client
+      const webhookClient = new LinearWebhookClient(env.LINEAR_WEBHOOK_SECRET);
+      
+      // Get request body and headers
+      const body = await request.text();
+      const signature = request.headers.get(LINEAR_WEBHOOK_SIGNATURE_HEADER) || "";
+      
+      // Parse payload and verify signature
+      const payload = JSON.parse(body);
+      const timestamp = payload[LINEAR_WEBHOOK_TS_FIELD];
+      webhookClient.verify(Buffer.from(body), signature, timestamp);
+
+      // Handle AgentSessionEvent with the new pattern
+      if (payload.type === "AgentSessionEvent") {
+        const token = await getOAuthToken(env, payload.organizationId);
         if (!token) {
           return new Response("Linear OAuth token not found", { status: 500 });
         }
 
         // Use waitUntil to ensure async processing completes
         ctx.waitUntil(
-          this.handleWebhook(webhook, token, env.OPENAI_API_KEY).catch(
+          this.handleWebhook(payload, token, env.OPENAI_API_KEY).catch(
             (error: unknown) => {
-              return new Response("Error handling webhook", { status: 500 });
+              console.error("Error handling webhook:", error);
             }
           )
         );
-
-        // Return immediately to prevent timeout
-        return new Response("Webhook handled", { status: 200 });
-      } catch (error) {
-        return new Response("Error handling webhook", { status: 500 });
       }
+      
+      return new Response("Webhook handled", { status: 200 });
+    } catch (error) {
+      console.error("Error in webhook handler:", error);
+      return new Response("Error handling webhook", { status: 500 });
     }
-
-    return new Response("OK", { status: 200 });
   },
-
-
 
   /**
    * Handle a Linear webhook asynchronously (for non-blocking processing).
