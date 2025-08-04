@@ -11,7 +11,7 @@
     "prepare": "husky"
   },
   "dependencies": {
-    "@linear/sdk": "54.0.0",
+    "@linear/sdk": "55.0.0",
     "@types/node": "^24.0.14",
     "openai": "4.85.4",
     "wrangler": "4.25.0"

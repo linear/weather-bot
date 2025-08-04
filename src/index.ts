@@ -1,7 +1,9 @@
+import { type AgentSessionEventWebhookPayload } from "@linear/sdk";
 import {
-  type AgentSessionEventWebhookPayload,
-  LinearWebhooks,
-} from "@linear/sdk";
+  LinearWebhookClient,
+  LINEAR_WEBHOOK_SIGNATURE_HEADER,
+  LINEAR_WEBHOOK_TS_FIELD,
+} from "@linear/sdk/webhooks";
 import {
   handleOAuthAuthorize,
   handleOAuthCallback,
@@ -48,12 +50,15 @@ export default {
         // Verify that the webhook is valid and of a type we need to handle
         const text = await request.text();
         const payloadBuffer = Buffer.from(text);
-        const linearSignature = request.headers.get("linear-signature") || "";
-        const linearWebhooks = new LinearWebhooks(env.LINEAR_WEBHOOK_SECRET);
-        const parsedPayload = linearWebhooks.parseData(
-          payloadBuffer,
-          linearSignature
-        );
+        const linearSignature = request.headers.get(LINEAR_WEBHOOK_SIGNATURE_HEADER) || "";
+        
+        // Parse the payload to get the timestamp
+        const parsedPayload = JSON.parse(text);
+        const timestamp = parsedPayload[LINEAR_WEBHOOK_TS_FIELD];
+        
+        // Create webhook client and verify the signature
+        const webhookClient = new LinearWebhookClient(env.LINEAR_WEBHOOK_SECRET);
+        webhookClient.verify(payloadBuffer, linearSignature, timestamp);
 
         if (parsedPayload.type !== "AgentSessionEvent") {
           return new Response("Webhook received", { status: 200 });
@@ -83,6 +88,8 @@ export default {
 
     return new Response("OK", { status: 200 });
   },
+
+
 
   /**
    * Handle a Linear webhook asynchronously (for non-blocking processing).
