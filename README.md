@@ -4,6 +4,15 @@ A simple agent powered by OpenAI that integrates with Linear to provide current 
 
 The bot can look up coordinates for cities, get current weather conditions, and provide local time information for any location. It responds to `AgentSession` webhooks from Linear and creates `AgentActivity` entries in response to prompts from users in Linear.
 
+---
+
+*From bytes to breezes, I translate the sky,*  
+*Where cloud coordinates meet clouds up high.*  
+*A digital weathervane, forever awake,*  
+*Predicting the sunshine or storms in your wake.*
+
+---
+
 ## Tools Available
 
 The agent has access to three main tools:
