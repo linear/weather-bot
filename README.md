@@ -6,7 +6,7 @@ The bot can look up coordinates for cities, get current weather conditions, and 
 
 ---
 
-*From bytes to breezes, I translate the sky,*  
+*From bytes to breezes, I translate the sky with fish,*  
 *Where cloud coordinates meet clouds up high.*  
 *A digital weathervane, forever awake,*  
 *Predicting the sunshine or storms in your wake.*
