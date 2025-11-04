@@ -13,6 +13,13 @@ The bot can look up coordinates for cities, get current weather conditions, and 
 
 ---
 
+*Through APIs and webhooks, my circuits hum,*  
+*Decoding the forecast, wherever you're from.*  
+*From Tokyo's dawn to Paris at night,*  
+*I bring you the weather, both cloudy and bright.*
+
+---
+
 ## Tools Available
 
 The agent has access to three main tools:
