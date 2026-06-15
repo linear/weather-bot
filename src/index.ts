@@ -1,11 +1,13 @@
-import { LinearWebhookClient } from "@linear/sdk/webhooks";
+import {
+  LinearWebhookClient,
+  AgentSessionEventWebhookPayload,
+} from "@linear/sdk/webhooks";
 import {
   handleOAuthAuthorize,
   handleOAuthCallback,
   getOAuthToken,
 } from "./lib/oauth";
 import { AgentClient } from "./lib/agent/agentClient";
-import { AgentSessionEventWebhookPayload } from "@linear/sdk";
 
 /**
  * This Cloudflare worker handles all requests for the demo agent.
@@ -46,8 +48,14 @@ export default {
         return new Response("GitHub token not configured", { status: 500 });
       }
 
-      if (!env.GITHUB_REPO) {
-        return new Response("GitHub repo not configured", { status: 500 });
+      if (!env.GITHUB_REPO_IOS) {
+        return new Response("GitHub iOS repo not configured", { status: 500 });
+      }
+
+      if (!env.GITHUB_REPO_SERVER) {
+        return new Response("GitHub server repo not configured", {
+          status: 500,
+        });
       }
 
       return this.handleWebhookWithEventListener(request, env, ctx);
@@ -77,7 +85,7 @@ export default {
       handler.on("AgentSessionEvent", (payload) => {
         // Don't await: hand the agent loop to waitUntil so we ack Linear
         // immediately (within its webhook timeout) and finish in the background.
-        ctx.waitUntil(this.handleAgentSessionEvent(payload, env, ctx));
+        ctx.waitUntil(this.handleAgentSessionEvent(payload, env));
       });
 
       return await handler(request);
@@ -91,13 +99,11 @@ export default {
    * Handle an AgentSessionEvent webhook asynchronously (for non-blocking processing).
    * @param webhook The agent session event webhook payload.
    * @param env The environment variables.
-   * @param ctx The execution context.
    * @returns A promise that resolves when the webhook is handled.
    */
   async handleAgentSessionEvent(
-    webhook: any,
-    env: Env,
-    ctx: ExecutionContext
+    webhook: AgentSessionEventWebhookPayload,
+    env: Env
   ): Promise<void> {
     const token = await getOAuthToken(env, webhook.organizationId);
     if (!token) {
@@ -111,13 +117,16 @@ export default {
       // repository_dispatch payload requires.
       identifier: issue?.identifier ?? "",
       title: issue?.title ?? "",
+      // Description is part of the context the LLM uses to route the task to
+      // the iOS vs. server repo.
+      description: issue?.description ?? "",
     };
 
     const agentClient = new AgentClient(
       token,
       env.OPENAI_API_KEY,
       env.GITHUB_TOKEN,
-      env.GITHUB_REPO,
+      { ios: env.GITHUB_REPO_IOS, server: env.GITHUB_REPO_SERVER },
       issueContext
     );
     const userPrompt = this.generateUserPrompt(webhook);
@@ -132,14 +141,23 @@ export default {
    * @returns The user prompt.
    */
   generateUserPrompt(webhook: AgentSessionEventWebhookPayload): string {
-    const issueTitle = webhook.agentSession.issue?.title;
+    const issue = webhook.agentSession.issue;
+    const issueTitle = issue?.title;
+    // The description carries the bulk of the task detail and is the main
+    // signal (alongside the title and any comment) the agent uses to route the
+    // task to the iOS vs. server repo.
+    const issueDescription = issue?.description;
+    const descriptionSection = issueDescription
+      ? `\n\nDescription: ${issueDescription}`
+      : "";
     const commentBody = webhook.agentSession.comment?.body;
     if (issueTitle && commentBody) {
-      return `Issue: ${issueTitle}\n\nTask: ${commentBody}`;
+      return `Issue: ${issueTitle}${descriptionSection}\n\nTask: ${commentBody}`;
     } else if (issueTitle) {
       // The agent was delegated/assigned this task with no comment. Let the
-      // agent decide from the title whether it's small, in-scope iOS app work.
-      return `This Linear task was delegated to you with no comment. If it is small, client-side iOS app work (a bug fix, small UI change, or small feature), triage it; otherwise politely decline. Issue: ${issueTitle}`;
+      // agent decide from the title and description which repo it belongs to
+      // (iOS app vs. server) and triage it there, or ask if it's unclear.
+      return `This Linear task was delegated to you with no comment. If it is client-side iOS app work or server/backend work, triage it into the right repo; if you can't tell which, ask. Issue: ${issueTitle}${descriptionSection}`;
     } else if (commentBody) {
       return `Task: ${commentBody}`;
     }

@@ -1,13 +1,16 @@
 /**
  * Trigger the "Estimate Issue" GitHub Actions workflow for a Linear issue.
  *
- * Fires a `repository_dispatch` event of type `pug-estimate` at the configured
- * repository. The workflow (on the repo's default branch) is the single entry
- * point for the automation: it validates the Linear issue, posts an
- * "estimating" status note and a triage summary as comments on the Linear
- * issue, applies `complexity:` / `effort:` / `autonomy:` labels, and — when
- * the verdict is ai-can-fix — chains straight into the automated fix that
- * opens a pull request.
+ * Fires a `repository_dispatch` event of type `pug-estimate` at the given
+ * repository (the iOS app or the server backend — both answer the same event;
+ * the caller picks which by passing the matching `repo`). The workflow (on the
+ * repo's default branch) is the single entry point for the automation: it
+ * validates the Linear issue, posts an "estimating" status note and a triage
+ * summary as comments on the Linear issue, and applies `complexity:` /
+ * `effort:` / `autonomy:` labels. On the iOS repo, when the verdict is
+ * ai-can-fix it chains straight into the automated fix that opens a pull
+ * request; the server workflow is scope-only (it estimates but does not open a
+ * PR automatically).
  *
  * Re-dispatching the same issue is safe and intentional: the workflow
  * serializes runs per Linear issue, and re-running (e.g. after answering

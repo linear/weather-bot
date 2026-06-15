@@ -18,6 +18,7 @@
 	"vars": {
 		"LINEAR_CLIENT_ID": "591be4120ff9e9ee37d58b85243eff6b",
 		"WORKER_URL": "https://puglet.alex-572.workers.dev",
-		"GITHUB_REPO": "Zest-Maps/ZestMaps-iOS"
+		"GITHUB_REPO_IOS": "Zest-Maps/ZestMaps-iOS",
+		"GITHUB_REPO_SERVER": "Zest-Maps/NotSwarm-Server"
 	}
 }

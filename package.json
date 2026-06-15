@@ -5,9 +5,9 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy --minify",
-    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
-    "lint": "eslint src --ext .ts",
-    "lint:fix": "eslint src --ext .ts --fix",
+    "cf-typegen": "wrangler types --env-interface Env",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix",
     "prepare": "husky"
   },
   "dependencies": {

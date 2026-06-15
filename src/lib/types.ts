@@ -28,9 +28,16 @@ export type Content =
   | { type: L.AgentActivityType.Error; body: string };
 
 /**
- * The name of a tool that can be executed by the agent
+ * The name of a tool that can be executed by the agent. There is one estimate
+ * tool per target repository; the tool the LLM picks is how it routes a task
+ * to the iOS client app vs. the server backend.
  */
-export type ToolName = "triggerEstimateWorkflow";
+export type ToolName = "triggerIosEstimate" | "triggerServerEstimate";
+
+const TOOL_NAMES: readonly ToolName[] = [
+  "triggerIosEstimate",
+  "triggerServerEstimate",
+];
 
 /**
  * Check if a string is a valid tool name
@@ -38,7 +45,7 @@ export type ToolName = "triggerEstimateWorkflow";
  * @returns True if the string is a valid tool name, false otherwise
  */
 export const isToolName = (value: string): value is ToolName => {
-  return value === "triggerEstimateWorkflow";
+  return (TOOL_NAMES as readonly string[]).includes(value);
 };
 
 /**

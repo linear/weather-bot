@@ -2,7 +2,7 @@
 
 A simple Linear agent powered by OpenAI that triages a Linear task by triggering an automated estimate workflow in GitHub. The bot is deployed to a Cloudflare Worker.
 
-When you ask the bot (in a Linear agent session) to "triage" the task, it fires a `repository_dispatch` event of type `pug-estimate` at a single, pre-configured GitHub repository:
+Puglet triages into **one of two repositories** — the iOS app or the server backend — and decides which by reading the task's title, description, and any explicit "iOS/server" hint in your comment. When you ask the bot (in a Linear agent session) to "triage" the task, it fires a `repository_dispatch` event of type `pug-estimate` at the matching repository:
 
 ```
 POST https://api.github.com/repos/<owner>/<repo>/dispatches
@@ -10,22 +10,26 @@ POST https://api.github.com/repos/<owner>/<repo>/dispatches
   "client_payload": { "linear_issue": "ZES-123", "instruction": "<optional note>" } }
 ```
 
-That dispatch triggers the `Estimate Issue` workflow on the repo's default branch, which takes it from there: it analyzes the Linear task and the affected code, posts a triage summary (complexity, effort, and an AI-autonomy verdict) as a comment on the Linear issue, applies `complexity:` / `effort:` / `autonomy:` labels, and — when the verdict is `ai-can-fix` — chains straight into an automated fix that opens a pull request.
+That dispatch triggers the `Estimate Issue` workflow on the repo's default branch, which takes it from there: it analyzes the Linear task and the affected code, posts a triage summary (complexity, effort, and an AI-autonomy verdict) as a comment on the Linear issue, and applies `complexity:` / `effort:` / `autonomy:` labels. On the **iOS** repo, when the verdict is `ai-can-fix` it chains straight into an automated fix that opens a pull request. The **server** repo is scope-only for now — it estimates but does not open a PR automatically yet.
 
-Triaging the task (for small, client-side iOS app work only) and sharing dog facts are the only things the bot can do: if asked for anything else, it politely declines — with a dog fact.
+If Puglet can't tell which repo a task belongs to (and you gave no hint), it asks rather than guessing. Triaging tasks (into either repo) and sharing dog facts are the only things the bot can do: if asked for anything else, it politely declines — with a dog fact.
 
 It responds to `AgentSession` webhooks from Linear and creates `AgentActivity` entries in response to prompts from users in Linear.
 
 ## Tools Available
 
-The agent has access to a single tool:
+The agent has one estimate tool per repo; which tool it calls is how it routes the task:
 
-1. **`triggerEstimateWorkflow(instruction)`** - Fires the `pug-estimate` repository dispatch for the originating Linear task. The Linear issue identifier (e.g. `ZES-123`) is pulled from the webhook payload; the optional `instruction` is a short free-text note the agent composes from any extra guidance the user gave in the session.
+1. **`triggerIosEstimate(instruction)`** - Fires the `pug-estimate` repository dispatch at the iOS app repo for client-side iOS/Swift work.
+2. **`triggerServerEstimate(instruction)`** - Fires the `pug-estimate` repository dispatch at the server backend repo for server/backend work.
+
+For both, the Linear issue identifier (e.g. `ZES-123`) is pulled from the webhook payload; the optional `instruction` is a short free-text note the agent composes from any extra guidance the user gave in the session.
 
 ## Example Interactions
 
-- "Triage this task." → triggers the estimate workflow
-- "Triage this, but keep the fix to the Settings screen." → triggers the workflow with that note as the instruction
+- "Triage this task." (clearly an app or backend task) → triggers the estimate workflow in the matching repo
+- "Server triage, but only the visits cron job." → triggers the server workflow with that note as the instruction
+- "Triage this." (ambiguous, no hint) → asks whether it's iOS or server work
 - "What's the weather in Paris?" → politely declines (with a dog fact)
 
 ## Re-running
@@ -60,20 +64,22 @@ src/
 ### GitHub token
 
 The bot authenticates to the GitHub REST API with a token to fire the
-`repository_dispatch` event. You need **one** of:
+`repository_dispatch` event. Because Puglet dispatches to **two** repos, the token
+must cover both (`Zest-Maps/ZestMaps-iOS` and `Zest-Maps/NotSwarm-Server`). You
+need **one** of:
 
-- **Fine-grained personal access token** (recommended) — scoped to the single
-  repository `Zest-Maps/ZestMaps-iOS`, with **Contents: Read and write**
-  repository permission (this is what the dispatches endpoint requires). This is
-  the most locked-down option.
+- **Fine-grained personal access token** (recommended) — scoped to both
+  repositories, with **Contents: Read and write** repository permission (this is
+  what the dispatches endpoint requires). This is the most locked-down option.
 - **Classic personal access token** — with the `repo` scope (or `public_repo` if
-  the repo is public).
+  the repos are public).
 
-Whichever you create, set it as the `GITHUB_TOKEN` secret (below). The target repo
-is configured via the `GITHUB_REPO` variable (`owner/repo`) in `wrangler.jsonc`.
-The `Estimate Issue` workflow (with `on: repository_dispatch: types: [pug-estimate]`)
-must exist on that repo's **default branch** — repository dispatches only trigger
-workflows from the default branch.
+Whichever you create, set it as the `GITHUB_TOKEN` secret (below). The target repos
+are configured via the `GITHUB_REPO_IOS` and `GITHUB_REPO_SERVER` variables
+(`owner/repo`) in `wrangler.jsonc`. The `Estimate Issue` workflow (with
+`on: repository_dispatch: types: [pug-estimate]`) must exist on each repo's
+**default branch** — repository dispatches only trigger workflows from the default
+branch.
 
 ### Cloudflare Worker Setup
 
@@ -84,7 +90,7 @@ workflows from the default branch.
 
 2. **Configure Cloudflare environment**
 
-   * Set your `WORKER_URL`, `LINEAR_CLIENT_ID`, and `GITHUB_REPO` variables in `wrangler.jsonc`
+   * Set your `WORKER_URL`, `LINEAR_CLIENT_ID`, `GITHUB_REPO_IOS`, and `GITHUB_REPO_SERVER` variables in `wrangler.jsonc`
 
    * Set the client secret, webhook secret, OpenAI API key, and GitHub token via wrangler
    ```

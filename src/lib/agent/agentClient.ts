@@ -7,12 +7,24 @@ import { Content, isToolName, ToolName, UnreachableCaseError } from "../types";
 
 /**
  * The Linear task that the agent session is attached to. The identifier
- * (e.g. "ZES-123") is what gets sent to the estimate workflow; the title is
- * kept only as context for messages.
+ * (e.g. "ZES-123") is what gets sent to the estimate workflow; the title and
+ * description are kept as context for messages and for the LLM's repo-routing
+ * decision (iOS client app vs. server backend).
  */
 export interface LinearIssueContext {
   identifier: string;
   title: string;
+  description: string;
+}
+
+/**
+ * The GitHub repositories Puglet can dispatch the estimate workflow to, keyed
+ * by the tool the LLM picks. Both repos answer the same `pug-estimate`
+ * repository_dispatch; only the target differs.
+ */
+export interface GithubRepos {
+  ios: string;
+  server: string;
 }
 
 /**
@@ -26,7 +38,7 @@ export class AgentClient {
   private linearClient: LinearClient;
   private openai: OpenAI;
   private githubToken: string;
-  private githubRepo: string;
+  private githubRepos: GithubRepos;
   private issueContext: LinearIssueContext;
 
   // Maximum number of iterations for the agent to prevent infinite loops
@@ -36,7 +48,7 @@ export class AgentClient {
     linearAccessToken: string,
     openaiApiKey: string,
     githubToken: string,
-    githubRepo: string,
+    githubRepos: GithubRepos,
     issueContext: LinearIssueContext
   ) {
     this.linearClient = new LinearClient({
@@ -52,7 +64,7 @@ export class AgentClient {
       maxRetries: 1,
     });
     this.githubToken = githubToken;
-    this.githubRepo = githubRepo;
+    this.githubRepos = githubRepos;
     this.issueContext = issueContext;
   }
 
@@ -211,7 +223,7 @@ export class AgentClient {
     // whitespace, lowercase), so strip leading markdown and match
     // case-insensitively rather than requiring an exact prefix.
     const normalized = response.trim().replace(/^[\s*_#`>]+/, "");
-    const mappedType = Object.entries(typeToKeyword).find(([_, keyword]) =>
+    const mappedType = Object.entries(typeToKeyword).find(([, keyword]) =>
       normalized.toUpperCase().startsWith(keyword)
     );
     // A reply with no recognizable keyword is almost always the final answer
@@ -235,7 +247,7 @@ export class AgentClient {
           : response.trim();
         return { type, body };
       }
-      case L.AgentActivityType.Action:
+      case L.AgentActivityType.Action: {
         // Parse action parameters. The argument is free text that may itself
         // contain parentheses, so prefer matching through to the LAST closing
         // paren at the end of the response; if the model added trailing prose
@@ -244,20 +256,24 @@ export class AgentClient {
         const actionMatch =
           normalized.match(/^ACTION:[\s*_`]*(\w+)\(([\s\S]*)\)\s*$/i) ??
           normalized.match(/^ACTION:[\s*_`]*(\w+)\(([^)]*)\)/i);
-        if (actionMatch) {
-          const [, toolNameRaw, params] = actionMatch;
-          if (!isToolName(toolNameRaw)) {
-            throw new Error(`Invalid tool name: ${toolNameRaw}`);
-          }
-          const toolName = toolNameRaw as ToolName;
-          return {
-            type,
-            action: toolName,
-            // Linear requires `parameter` to be a string; an action with no
-            // arguments must send "" rather than null, or the activity is rejected.
-            parameter: params || "",
-          };
+        // An ACTION reply we can't parse into a tool call is treated as
+        // unreachable, same as before: it surfaces as an error to the loop.
+        if (!actionMatch) {
+          throw new UnreachableCaseError(type);
         }
+        const [, toolNameRaw, params] = actionMatch;
+        if (!isToolName(toolNameRaw)) {
+          throw new Error(`Invalid tool name: ${toolNameRaw}`);
+        }
+        const toolName = toolNameRaw as ToolName;
+        return {
+          type,
+          action: toolName,
+          // Linear requires `parameter` to be a string; an action with no
+          // arguments must send "" rather than null, or the activity is rejected.
+          parameter: params || "",
+        };
+      }
       default:
         throw new UnreachableCaseError(type);
     }
@@ -274,27 +290,43 @@ export class AgentClient {
   }): Promise<string> {
     const { action, parameter } = props;
     switch (action) {
-      case "triggerEstimateWorkflow": {
-        // The dispatch returns 204 regardless of what the workflow's guard
-        // thinks of the payload, so an invalid identifier would fail silently
-        // downstream. Catch it here and tell the user instead.
-        const identifier = this.issueContext.identifier;
-        if (!LINEAR_IDENTIFIER_REGEX.test(identifier)) {
-          return `Error: this agent session is not attached to a Linear issue with a valid identifier (got "${identifier}"), so the estimate workflow cannot be triggered.`;
-        }
-
-        // The identifier comes from the webhook payload, never from the LLM;
-        // the only LLM-provided input is the free-text instruction.
-        return await triggerEstimateWorkflow({
-          token: this.githubToken,
-          repo: this.githubRepo,
-          linearIssueId: identifier,
-          instruction: (parameter ?? "").trim(),
-        });
-      }
+      // Which tool the LLM picks is how it routes the task to a repo; both go
+      // through the same dispatch path, differing only in the target repo.
+      case "triggerIosEstimate":
+        return await this.dispatchEstimate(this.githubRepos.ios, parameter);
+      case "triggerServerEstimate":
+        return await this.dispatchEstimate(this.githubRepos.server, parameter);
       default:
         throw new UnreachableCaseError(action);
     }
+  }
+
+  /**
+   * Validate the issue identifier and fire the estimate workflow at a repo.
+   * @param repo - The target repository ("owner/repo")
+   * @param parameter - The free-text instruction the LLM composed (may be null)
+   * @returns The dispatch result (a success or error string)
+   */
+  private async dispatchEstimate(
+    repo: string,
+    parameter: string | null
+  ): Promise<string> {
+    // The dispatch returns 204 regardless of what the workflow's guard thinks
+    // of the payload, so an invalid identifier would fail silently downstream.
+    // Catch it here and tell the user instead.
+    const identifier = this.issueContext.identifier;
+    if (!LINEAR_IDENTIFIER_REGEX.test(identifier)) {
+      return `Error: this agent session is not attached to a Linear issue with a valid identifier (got "${identifier}"), so the estimate workflow cannot be triggered.`;
+    }
+
+    // The identifier comes from the webhook payload, never from the LLM; the
+    // only LLM-provided input is the free-text instruction.
+    return await triggerEstimateWorkflow({
+      token: this.githubToken,
+      repo,
+      linearIssueId: identifier,
+      instruction: (parameter ?? "").trim(),
+    });
   }
 
   /**
@@ -355,7 +387,11 @@ export class AgentClient {
       .filter(
         (activity) =>
           activity.content.type === L.AgentActivityType.Prompt ||
-          activity.content.type === L.AgentActivityType.Response
+          activity.content.type === L.AgentActivityType.Response ||
+          // Keep the agent's clarifying questions too: when Puglet asks "iOS or
+          // server?" via an Elicitation and the user replies in a later turn,
+          // the question must be in history or a terse reply loses its meaning.
+          activity.content.type === L.AgentActivityType.Elicitation
       )
       .reverse()) {
       const role =
@@ -364,7 +400,8 @@ export class AgentClient {
           : "assistant";
       const typedContent = activity.content as
         | L.AgentActivityPromptContent
-        | L.AgentActivityResponseContent;
+        | L.AgentActivityResponseContent
+        | L.AgentActivityElicitationContent;
       const content = typedContent.body;
       activities.push({ role, content });
     }
